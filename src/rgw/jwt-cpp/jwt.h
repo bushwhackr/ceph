@@ -439,6 +439,9 @@ namespace jwt {
 			 * \throws signature_verification_exception If the provided signature does not match
 			 */
 			void verify(const std::string& data, const std::string& signature) const {
+				// The JWS signature is R || S, each the size of the curve order (RFC 7518 section 3.4)
+				if (signature.size() != signature_length)
+					throw signature_verification_exception("Invalid signature length");
 				const std::string hash = generate_hash(data);
 				auto r = raw2bn(signature.substr(0, signature.size() / 2));
 				auto s = raw2bn(signature.substr(signature.size() / 2));
