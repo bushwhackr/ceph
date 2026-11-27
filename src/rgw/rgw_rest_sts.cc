@@ -49,6 +49,7 @@
 #include "rgw_rest_oidc_provider.h"
 #include "rgw_url.h"
 #include "rgw_asio_thread.h"
+#include "rgw_sts_ec_jwk.h"
 
 
 #define dout_context g_ceph_context
@@ -739,8 +740,15 @@ WebTokenEngine::validate_signature(const DoutPrefixProvider* dpp, const jwt::dec
               // Try bare key validation
               ldpp_dout(dpp, 20) << "Trying bare key validation" << dendl;
               std::string kty;
-              if (JSONDecoder::decode_json("kty", kty, &k_parser) && kty != "RSA") {
-                ldpp_dout(dpp, 10) << "Only RSA bare key validation is currently supported" << dendl;
+              const bool has_kty = JSONDecoder::decode_json("kty", kty, &k_parser);
+              if (has_kty && kty == "EC") {
+                if (detail::validate_signature_using_ec_jwk(dpp, decoded, algorithm, k_parser)) {
+                  return;
+                }
+                continue;
+              }
+              if (has_kty && kty != "RSA") {
+                ldpp_dout(dpp, 10) << "Unsupported bare key type: kty=" << kty << dendl;
                 continue;
               }
 

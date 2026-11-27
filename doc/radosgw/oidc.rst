@@ -150,6 +150,32 @@ The ``<account-id>`` in the ARN must match the account that owns the role.
    is loaded from during JWT signature validation.
 
 
+JWT Signing Keys
+================
+
+For ``AssumeRoleWithWebIdentity``, RGW fetches the JSON Web Key Set (JWKS) from
+the ``jwks_uri`` in the provider's ``/.well-known/openid-configuration``
+document. It tries each signing key in the JWKS (a key whose ``use`` is ``sig``,
+or that has no ``use``) until one verifies the token's signature. A key can be
+published in any of these forms:
+
+- An ``x5c`` certificate, for tokens signed with RS256, RS384, RS512, ES256,
+  ES384, ES512, PS256, PS384 or PS512.
+- A bare RSA key (``"kty": "RSA"`` with ``n`` and ``e``), for tokens signed with
+  RS256, RS384 or RS512.
+- A bare EC key (``"kty": "EC"`` with ``crv``, ``x`` and ``y``), for tokens
+  signed with ES256 (curve ``P-256``), ES384 (``P-384``) or ES512 (``P-521``).
+  An EC key is only tried for a token whose ``alg`` goes with its curve and, if
+  the key has an ``alg``, equals it. SPIRE's OIDC discovery provider publishes
+  its keys in this form, for example::
+
+    {"keys": [{"kty": "EC", "kid": "fLTmH08biAxr6FxgZKHpy6fnXnuu3WLN",
+               "crv": "P-384", "alg": "ES384", "x": "...", "y": "..."}]}
+
+Keys of other types, such as ``OKP`` and ``oct``, and EC keys on other curves
+are skipped. Tokens signed with HMAC (HS256, HS384 and HS512) are rejected.
+
+
 REST APIs for Manipulating an OpenID Connect Provider
 =====================================================
 

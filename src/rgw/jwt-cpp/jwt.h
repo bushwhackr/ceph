@@ -126,6 +126,20 @@ namespace jwt {
 				throw rsa_exception("failed to load private key: PEM_read_bio_PrivateKey failed");
 			return pkey;
 		}
+
+		/**
+		 * Decode base64url without padding, as used for JWK members (RFC 7515 section 2)
+		 * \param str base64url string without padding
+		 * \return decoded bytes
+		 * \throws std::runtime_error If str isn't valid unpadded base64url
+		 */
+		inline
+		std::string decode_base64url_unpadded(std::string str) {
+			if (str.size() % 4 > 1)
+				for (size_t i = str.size() % 4; i < 4; i++)
+					str += alphabet::base64url::fill();
+			return base::decode<alphabet::base64url>(str);
+		}
 	}
 
 	namespace algorithm {
@@ -401,6 +415,46 @@ namespace jwt {
 				if(EC_KEY_check_key(pkey.get()) == 0)
 					throw ecdsa_exception("failed to load key: key is invalid");
 			}
+
+			/**
+			 * Construct new ecdsa algorithm without a key.
+			 * Load the public key with setAffineCoordinatesCalcPublicKey() before verifying.
+			 * \param md Pointer to hash function
+			 * \param name Name of the algorithm
+			 * \param siglen Length of the R || S signature in bytes
+			 */
+			ecdsa(const EVP_MD*(*md)(), const std::string& name, size_t siglen)
+				: md(md), alg_name(name), signature_length(siglen)
+			{}
+
+			/**
+			 * Load the public key from the "x" and "y" members of an EC JWK (RFC 7518 section 6.2.1)
+			 * \param curve_nid OpenSSL NID of the curve
+			 * \param x base64url-encoded x coordinate
+			 * \param y base64url-encoded y coordinate
+			 * \throws ecdsa_exception If a coordinate has the wrong length or the point is not on the curve
+			 * \throws std::runtime_error If a coordinate isn't valid unpadded base64url
+			 */
+			void setAffineCoordinatesCalcPublicKey(int curve_nid, const std::string& x, const std::string& y)
+			{
+				const std::string x_bin = helper::decode_base64url_unpadded(x);
+				const std::string y_bin = helper::decode_base64url_unpadded(y);
+				// Each coordinate is the full size of a field element (RFC 7518 sections 6.2.1.2 and 6.2.1.3)
+				if (x_bin.size() != signature_length / 2 || y_bin.size() != signature_length / 2)
+					throw ecdsa_exception("invalid length for EC x or y coordinate");
+
+				std::unique_ptr<EC_KEY, decltype(&EC_KEY_free)> key(EC_KEY_new_by_curve_name(curve_nid), EC_KEY_free);
+				auto bn_x = raw2bn(x_bin);
+				auto bn_y = raw2bn(y_bin);
+				// Runs EC_KEY_check_key(), so fails unless (x, y) is a point on the curve
+				if (!key || !bn_x || !bn_y ||
+				    EC_KEY_set_public_key_affine_coordinates(key.get(), bn_x.get(), bn_y.get()) != 1) {
+					ERR_clear_error();
+					throw ecdsa_exception("invalid EC public key: point is not on the curve");
+				}
+				pkey.reset(key.release(), EC_KEY_free);
+			}
+
 			/**
 			 * Sign jwt data
 			 * \param data The data to sign
@@ -408,6 +462,8 @@ namespace jwt {
 			 * \throws signature_generation_exception
 			 */
 			std::string sign(const std::string& data) const {
+				if (!pkey)
+					throw signature_generation_exception("failed to create signature: no key loaded");
 				const std::string hash = generate_hash(data);
 
 				std::unique_ptr<ECDSA_SIG, decltype(&ECDSA_SIG_free)>
@@ -439,6 +495,11 @@ namespace jwt {
 			 * \throws signature_verification_exception If the provided signature does not match
 			 */
 			void verify(const std::string& data, const std::string& signature) const {
+				if (!pkey)
+					throw signature_verification_exception("failed to verify signature: no key loaded");
+				// The JWS signature is R || S, each the size of the curve order (RFC 7518 section 3.4)
+				if (signature.size() != signature_length)
+					throw signature_verification_exception("Invalid signature length");
 				const std::string hash = generate_hash(data);
 				auto r = raw2bn(signature.substr(0, signature.size() / 2));
 				auto s = raw2bn(signature.substr(signature.size() / 2));
@@ -751,6 +812,18 @@ namespace jwt {
 			explicit es256(const std::string& public_key, const std::string& private_key = "", const std::string& public_key_password = "", const std::string& private_key_password = "")
 				: ecdsa(public_key, private_key, public_key_password, private_key_password, EVP_sha256, "ES256", 64)
 			{}
+
+			es256() : ecdsa(EVP_sha256, "ES256", 64)
+			{}
+
+			/**
+			 * Load a P-256 public key from the base64url "x" and "y" of a JWK
+			 */
+			es256& setAffineCoordinates(const std::string& x, const std::string& y)
+			{
+				ecdsa::setAffineCoordinatesCalcPublicKey(NID_X9_62_prime256v1, x, y);
+				return *this;
+			}
 		};
 		/**
 		 * ES384 algorithm
@@ -766,6 +839,18 @@ namespace jwt {
 			explicit es384(const std::string& public_key, const std::string& private_key = "", const std::string& public_key_password = "", const std::string& private_key_password = "")
 				: ecdsa(public_key, private_key, public_key_password, private_key_password, EVP_sha384, "ES384", 96)
 			{}
+
+			es384() : ecdsa(EVP_sha384, "ES384", 96)
+			{}
+
+			/**
+			 * Load a P-384 public key from the base64url "x" and "y" of a JWK
+			 */
+			es384& setAffineCoordinates(const std::string& x, const std::string& y)
+			{
+				ecdsa::setAffineCoordinatesCalcPublicKey(NID_secp384r1, x, y);
+				return *this;
+			}
 		};
 		/**
 		 * ES512 algorithm
@@ -781,6 +866,18 @@ namespace jwt {
 			explicit es512(const std::string& public_key, const std::string& private_key = "", const std::string& public_key_password = "", const std::string& private_key_password = "")
 				: ecdsa(public_key, private_key, public_key_password, private_key_password, EVP_sha512, "ES512", 132)
 			{}
+
+			es512() : ecdsa(EVP_sha512, "ES512", 132)
+			{}
+
+			/**
+			 * Load a P-521 public key from the base64url "x" and "y" of a JWK
+			 */
+			es512& setAffineCoordinates(const std::string& x, const std::string& y)
+			{
+				ecdsa::setAffineCoordinatesCalcPublicKey(NID_secp521r1, x, y);
+				return *this;
+			}
 		};
 
 		/**

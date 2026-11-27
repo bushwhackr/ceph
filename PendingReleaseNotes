@@ -30,6 +30,11 @@
   ``lockers`` field rather than the truth value of the returned object
   to determine whether any clients hold the lock.
 
+* RGW: ``AssumeRoleWithWebIdentity`` now accepts tokens signed with ES256, ES384
+  or ES512 when the OIDC provider's JWKS publishes the key as a bare EC key
+  (``crv``, ``x`` and ``y``, with no ``x5c`` certificate), as SPIRE's OIDC
+  discovery provider does.
+
 * RGW: The "Bytes Sent" field is always set to "-" when bucket-logging is enabled
   in Standard mode.
 
